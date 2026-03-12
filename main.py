@@ -23,10 +23,10 @@ from .tools.steal_meme import StealMemeTool
     "2.0.0",
 )
 class AngelSmilePlugin(Star):
-    def __init__(self, context: Context):
-        super().__init__(context)
+    def __init__(self, context: Context, config=None):
+        super().__init__(context, config)
         self.context = context
-        self.config = context.get_config()
+        self.config = config or {}
 
         plugin_dir = Path(__file__).resolve().parent
         data_dir = StarTools.get_data_dir()
@@ -40,7 +40,7 @@ class AngelSmilePlugin(Star):
         )
 
         self.storage = MemeStorage(paths)
-        self.manager = MemeManager(self.storage, context)
+        self.manager = MemeManager(self.storage, context, plugin_config=self.config)
         self.renderer = StickerRenderer(self.storage)
         self.steal_meme_tool = StealMemeTool(manager=self.manager)
 

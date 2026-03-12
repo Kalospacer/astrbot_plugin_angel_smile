@@ -69,9 +69,10 @@ FALLBACK_REVIEW_POSITIVE_MARKERS = (
 
 
 class MemeManager:
-    def __init__(self, storage, context=None):
+    def __init__(self, storage, context=None, plugin_config=None):
         self.storage = storage
         self.context = context
+        self.plugin_config = plugin_config or {}
         self.write_lock = Lock()
         self.dedup = DHashDedupService(storage=self.storage)
         self.allowed_image_roots = get_allowed_image_roots(
@@ -85,6 +86,10 @@ class MemeManager:
         """设置 AstrBot 上下文，用于调用 LLM"""
         self.context = context
 
+    def set_plugin_config(self, plugin_config) -> None:
+        """设置插件配置。"""
+        self.plugin_config = plugin_config or {}
+
     def _get_llm_provider(self):
         """获取配置的 LLM provider"""
         if self.context is None:
@@ -92,11 +97,10 @@ class MemeManager:
             return None
 
         try:
-            config = self.context.get_config()
-            provider_id = config.get("tag_provider_id", "") if config else ""
+            provider_id = self.plugin_config.get("tag_provider_id", "")
 
             if provider_id:
-                provider = self.context.provider_manager.get_provider_by_id(provider_id)
+                provider = self.context.get_provider_by_id(provider_id)
             else:
                 provider = self.context.get_using_provider() or None
 
@@ -111,15 +115,13 @@ class MemeManager:
             return DEFAULT_REVIEW_SYSTEM_PROMPT
 
         try:
-            config = self.context.get_config()
-            if config:
-                review_prompt = config.get("review_system_prompt", "")
-                if (
-                    review_prompt
-                    and isinstance(review_prompt, str)
-                    and review_prompt.strip()
-                ):
-                    return review_prompt.strip()
+            review_prompt = self.plugin_config.get("review_system_prompt", "")
+            if (
+                review_prompt
+                and isinstance(review_prompt, str)
+                and review_prompt.strip()
+            ):
+                return review_prompt.strip()
         except Exception as exc:
             logger.warning(f"AngelSmile: 获取 review_system_prompt 配置失败: {exc}")
 
