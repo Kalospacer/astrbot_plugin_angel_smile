@@ -41,6 +41,32 @@ DEFAULT_REVIEW_SYSTEM_PROMPT = """请审查这张图片是否是表情包/梗图
 
 只输出 JSON，不要输出其他内容。"""
 
+FALLBACK_REVIEW_NEGATIVE_MARKERS = (
+    "不适合",
+    "不应该偷",
+    "不建议偷",
+    "不是表情包",
+    "不是梗图",
+    "不是二次元",
+    'should_steal": false',
+    "should_steal:false",
+    '"should_steal": false',
+)
+
+FALLBACK_REVIEW_POSITIVE_MARKERS = (
+    "是表情包",
+    "是梗图",
+    "是二次元",
+    "适合作为聊天表情包",
+    "适合做表情包",
+    "适合作为表情包",
+    "建议偷",
+    "应该偷",
+    'should_steal": true',
+    "should_steal:true",
+    '"should_steal": true',
+)
+
 
 class MemeManager:
     def __init__(self, storage, context=None):
@@ -99,6 +125,13 @@ class MemeManager:
 
         return DEFAULT_REVIEW_SYSTEM_PROMPT
 
+    @staticmethod
+    def _fallback_should_steal(result_text: str) -> bool:
+        text_lower = result_text.lower()
+        if any(marker in text_lower for marker in FALLBACK_REVIEW_NEGATIVE_MARKERS):
+            return False
+        return any(marker in text_lower for marker in FALLBACK_REVIEW_POSITIVE_MARKERS)
+
     async def review_image(self, image_url: str) -> dict:
         """
         使用 LLM 审查图片是否是表情包
@@ -143,17 +176,7 @@ class MemeManager:
                 except json.JSONDecodeError:
                     pass
 
-            text_lower = result_text.lower()
-            should_steal = any(
-                keyword in text_lower
-                for keyword in [
-                    "是表情包",
-                    "是梗图",
-                    "是二次元",
-                    "适合",
-                    "should_steal",
-                ]
-            )
+            should_steal = self._fallback_should_steal(result_text)
 
             tags = []
             if should_steal:
@@ -196,19 +219,6 @@ class MemeManager:
             if temp_file_path is None:
                 return {"success": False, "meme_id": "", "message": "下载图片失败"}
 
-            async with self.write_lock:
-                duplicate = self.dedup.find_similar_duplicate(temp_file_path)
-                if duplicate is not None:
-                    logger.info(
-                        f"AngelSmile: 图片已存在，跳过保存: {duplicate.matched_file}"
-                    )
-                    self._cleanup_temp_file(temp_file_path)
-                    return {
-                        "success": False,
-                        "meme_id": "",
-                        "message": f"图片已存在: {duplicate.matched_file}",
-                    }
-
             if not tags or not isinstance(tags, list):
                 tags = ["未分类", "自动导入"]
 
@@ -233,32 +243,46 @@ class MemeManager:
             target_dir.mkdir(parents=True, exist_ok=True)
             target_file = target_dir / file_name
 
-            shutil.move(str(temp_file_path), str(target_file))
-            temp_file_path = None
-
-            meme_id = f"{normalized_category}_{timestamp}_{random_suffix}"
-
             source_info = "auto_steal"
             if source_group:
                 source_info += f"_group:{source_group}"
             if source_user:
                 source_info += f"_user:{source_user}"
 
-            success = self.storage.save_meme_with_tags(
-                meme_id=meme_id,
-                file_path=str(target_file),
-                tags=tags,
-                source=source_info,
-            )
-            if not success:
-                target_file.unlink(missing_ok=True)
-                return {
-                    "success": False,
-                    "meme_id": "",
-                    "message": "保存表情包到数据库失败",
-                }
+            async with self.write_lock:
+                duplicate = self.dedup.find_similar_duplicate(temp_file_path)
+                if duplicate is not None:
+                    logger.info(
+                        f"AngelSmile: 图片已存在，跳过保存: {duplicate.matched_file}"
+                    )
+                    self._cleanup_temp_file(temp_file_path)
+                    temp_file_path = None
+                    return {
+                        "success": False,
+                        "meme_id": "",
+                        "message": f"图片已存在: {duplicate.matched_file}",
+                    }
 
-            self.dedup.register_file(target_file)
+                shutil.move(str(temp_file_path), str(target_file))
+                temp_file_path = None
+
+                meme_id = f"{normalized_category}_{timestamp}_{random_suffix}"
+                success = self.storage.save_meme_with_tags(
+                    meme_id=meme_id,
+                    file_path=str(target_file),
+                    tags=tags,
+                    source=source_info,
+                )
+                if not success:
+                    target_file.unlink(missing_ok=True)
+                    return {
+                        "success": False,
+                        "meme_id": "",
+                        "message": "保存表情包到数据库失败",
+                    }
+
+                self.dedup.register_file(target_file)
+
             logger.info(f"AngelSmile: 保存表情包成功，meme_id={meme_id}, tags={tags}")
             return {
                 "success": True,
