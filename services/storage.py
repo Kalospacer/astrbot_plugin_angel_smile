@@ -59,6 +59,18 @@ class MemeStorage:
             "added_time": row["added_time"],
         }
 
+    def _ensure_tag_index_description_column(self) -> None:
+        """兼容旧库，为 tag_index 增加 description 列。"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(tag_index)")
+        columns = {row["name"] for row in cursor.fetchall()}
+        if "description" not in columns:
+            cursor.execute(
+                "ALTER TABLE tag_index ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+            )
+            conn.commit()
+
     def _close_connection(self) -> None:
         """关闭数据库连接"""
         if self._conn is not None:
@@ -86,7 +98,8 @@ class MemeStorage:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tag_index (
                 tag TEXT PRIMARY KEY,
-                meme_ids TEXT NOT NULL DEFAULT '[]'
+                meme_ids TEXT NOT NULL DEFAULT '[]',
+                description TEXT NOT NULL DEFAULT ''
             )
         """)
 
@@ -97,6 +110,7 @@ class MemeStorage:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tag_index_tag ON tag_index(tag)")
 
         conn.commit()
+        self._ensure_tag_index_description_column()
 
     def initialize(self) -> None:
         self.paths.data_dir.mkdir(parents=True, exist_ok=True)
@@ -163,6 +177,7 @@ class MemeStorage:
                                         "migrated",
                                         0,
                                         time.time(),
+                                        {category: str(description or "").strip()},
                                     )
 
                 conn.commit()
@@ -198,7 +213,14 @@ class MemeStorage:
             category = rel_path.parts[0] if len(rel_path.parts) > 1 else "unsorted"
             meme_id = f"{category}_{rel_path.stem}_{int(time.time() * 1000)}"
             self._save_meme_internal(
-                cursor, meme_id, file_path, [category], "synced", 0, time.time()
+                cursor,
+                meme_id,
+                file_path,
+                [category],
+                "synced",
+                0,
+                time.time(),
+                {category: self.stickers_data.get(category, "").strip()},
             )
 
         for file_path in existing_paths - current_paths:
@@ -215,9 +237,11 @@ class MemeStorage:
         source: str | None,
         usage_count: int,
         added_time: float,
+        tag_descriptions: dict[str, str] | None = None,
     ) -> None:
         """内部方法：保存表情包到数据库"""
         tags_json = json.dumps(tags, ensure_ascii=False)
+        tag_descriptions = tag_descriptions or {}
 
         cursor.execute(
             """INSERT OR REPLACE INTO memes
@@ -228,6 +252,7 @@ class MemeStorage:
 
         # 更新 tag_index
         for tag in tags:
+            description = str(tag_descriptions.get(tag, "") or "").strip()
             cursor.execute("SELECT meme_ids FROM tag_index WHERE tag = ?", (tag,))
             row = cursor.fetchone()
             if row:
@@ -235,13 +260,24 @@ class MemeStorage:
                 if meme_id not in meme_ids:
                     meme_ids.append(meme_id)
                     cursor.execute(
-                        "UPDATE tag_index SET meme_ids = ? WHERE tag = ?",
-                        (json.dumps(meme_ids, ensure_ascii=False), tag),
+                        "UPDATE tag_index SET meme_ids = ?, description = CASE "
+                        "WHEN ? != '' THEN ? ELSE description END WHERE tag = ?",
+                        (
+                            json.dumps(meme_ids, ensure_ascii=False),
+                            description,
+                            description,
+                            tag,
+                        ),
+                    )
+                elif description:
+                    cursor.execute(
+                        "UPDATE tag_index SET description = ? WHERE tag = ?",
+                        (description, tag),
                     )
             else:
                 cursor.execute(
-                    "INSERT INTO tag_index (tag, meme_ids) VALUES (?, ?)",
-                    (tag, json.dumps([meme_id], ensure_ascii=False)),
+                    "INSERT INTO tag_index (tag, meme_ids, description) VALUES (?, ?, ?)",
+                    (tag, json.dumps([meme_id], ensure_ascii=False), description),
                 )
 
     def _delete_meme_internal(self, cursor: sqlite3.Cursor, file_path: str) -> None:
@@ -327,14 +363,15 @@ class MemeStorage:
             cursor = conn.cursor()
 
             # 从 tag_index 获取所有 tag 作为分类
-            cursor.execute("SELECT tag FROM tag_index")
-            tags = [row[0] for row in cursor.fetchall()]
+            cursor.execute("SELECT tag, description FROM tag_index")
+            tag_rows = cursor.fetchall()
 
             # 构建 stickers_data（兼容旧版）
             self.stickers_data = {}
-            for tag in tags:
-                # 使用 tag 作为分类名，描述默认为空
-                self.stickers_data[tag] = f"{tag} 分类的表情包"
+            for row in tag_rows:
+                tag = row["tag"]
+                description = str(row["description"] or "").strip()
+                self.stickers_data[tag] = description or f"{tag} 分类的表情包"
 
             logger.info(f"AngelSmile: 已加载 {len(self.stickers_data)} 个表情分类")
         except Exception as exc:
@@ -451,12 +488,17 @@ class MemeStorage:
 
         # 保存到数据库
         meme_id = f"{category}_{target_file.stem}_{int(time.time() * 1000)}"
-        self.save_meme_with_tags(
+        saved = self.save_meme_with_tags(
             meme_id=meme_id,
             file_path=str(target_file),
             tags=[category],
             source="manual_save",
+            tag_descriptions={category: str(description or "").strip()},
         )
+        if not saved:
+            target_file.unlink(missing_ok=True)
+            self._remove_empty_parent_dirs(target_file)
+            raise RuntimeError("保存表情包到数据库失败")
 
         # 更新分类数据（兼容旧版）
         if category not in self.stickers_data:
@@ -479,6 +521,7 @@ class MemeStorage:
         file_path: str,
         tags: list[str],
         source: str | None = None,
+        tag_descriptions: dict[str, str] | None = None,
     ) -> bool:
         """
         保存表情包到数据库（带标签）
@@ -497,7 +540,14 @@ class MemeStorage:
             cursor = conn.cursor()
             relative_path = self._to_relative_storage_path(file_path)
             self._save_meme_internal(
-                cursor, meme_id, relative_path, tags, source, 0, time.time()
+                cursor,
+                meme_id,
+                relative_path,
+                tags,
+                source,
+                0,
+                time.time(),
+                tag_descriptions,
             )
             conn.commit()
             return True
@@ -579,6 +629,21 @@ class MemeStorage:
             result[row["tag"]] = json.loads(row["meme_ids"])
 
         return result
+
+    def set_tag_description(self, tag: str, description: str) -> bool:
+        """更新单个 tag 的描述。"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE tag_index SET description = ? WHERE tag = ?",
+                (str(description or "").strip(), tag),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as exc:
+            logger.error(f"AngelSmile: 更新分类描述失败: {exc}")
+            return False
 
     def get_meme_by_id(self, meme_id: str) -> dict[str, Any] | None:
         """

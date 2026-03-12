@@ -205,22 +205,24 @@ class AngelSmilePlugin(Star):
                 logger.info("AngelSmile: 没有找到可以清理的表情包")
                 return
 
-            deleted_count = 0
-            for meme in least_used:
-                meme_id = meme.get("meme_id")
-                usage_count = meme.get("usage_count", 0)
-                file_path = meme.get("file_path", "unknown")
+            async with self.manager.write_lock:
+                deleted_count = 0
+                for meme in least_used:
+                    meme_id = meme.get("meme_id")
+                    usage_count = meme.get("usage_count", 0)
+                    file_path = meme.get("file_path", "unknown")
 
-                if self.storage.delete_meme(meme_id):
-                    deleted_count += 1
-                    logger.info(
-                        f"AngelSmile: 已清理表情包 [{meme_id}] (使用次数: {usage_count}, 路径: {file_path})"
-                    )
-                else:
-                    logger.warning(f"AngelSmile: 清理表情包失败 [{meme_id}]")
+                    if self.storage.delete_meme(meme_id):
+                        self.manager.dedup.unregister_file(Path(file_path))
+                        deleted_count += 1
+                        logger.info(
+                            f"AngelSmile: 已清理表情包 [{meme_id}] (使用次数: {usage_count}, 路径: {file_path})"
+                        )
+                    else:
+                        logger.warning(f"AngelSmile: 清理表情包失败 [{meme_id}]")
 
-            # 重新加载分类数据（因为可能删除了某些分类的最后一个表情包）
-            self.storage.load_stickers_data()
+                # 重新加载分类数据（因为可能删除了某些分类的最后一个表情包）
+                self.storage.load_stickers_data()
 
             logger.info(
                 f"AngelSmile: 清理完成，删除了 {deleted_count}/{len(least_used)} 个表情包"
@@ -274,14 +276,7 @@ class AngelSmilePlugin(Star):
     ):
         """LLM 审查图片并决定是否偷图"""
         try:
-            # 检查当前表情包数量是否超过限制
             max_stickers = self.config.get("max_stickers", 100)
-            current_count = self.storage.get_sticker_count()
-            if current_count >= max_stickers:
-                logger.info(
-                    f"[AngelSmile] 当前表情包数量 ({current_count}) 已达到上限 ({max_stickers})，跳过偷图"
-                )
-                return
 
             # 调用 LLM 审查
             review_result = await self.manager.review_image(image_url)
@@ -298,8 +293,12 @@ class AngelSmilePlugin(Star):
                 tags=review_result["tags"],
                 source_group=source_group,
                 source_user=source_user,
+                max_stickers=max_stickers,
             )
-            logger.info(f"[AngelSmile] 自动偷图成功: {result}")
+            if result.get("success"):
+                logger.info(f"[AngelSmile] 自动偷图成功: {result}")
+            else:
+                logger.info(f"[AngelSmile] 自动偷图跳过: {result.get('message', '未知原因')}")
 
         except Exception as e:
             logger.error(f"[AngelSmile] 自动偷图失败: {e}", exc_info=True)
@@ -369,10 +368,11 @@ class AngelSmilePlugin(Star):
                 )
                 return
 
-            deleted_file_paths = self.storage.delete_all_memes_and_get_paths()
-            deleted_count = len(deleted_file_paths)
-            if deleted_count > 0:
-                self.manager.dedup.clear()
+            async with self.manager.write_lock:
+                deleted_file_paths = self.storage.delete_all_memes_and_get_paths()
+                deleted_count = len(deleted_file_paths)
+                if deleted_count > 0:
+                    self.manager.dedup.clear()
             await event.send(
                 MessageChain().message(f"已删除全部表情包，共 {deleted_count} 项。")
             )
@@ -393,11 +393,14 @@ class AngelSmilePlugin(Star):
             )
             return
 
-        if self.storage.delete_meme(meme["meme_id"]):
-            self.manager.dedup.unregister_file(Path(meme["file_path"]))
-            self.storage.load_stickers_data()
-            await event.send(MessageChain().message(f"已删除表情包: {meme['meme_id']}"))
-            return
+        async with self.manager.write_lock:
+            if self.storage.delete_meme(meme["meme_id"]):
+                self.manager.dedup.unregister_file(Path(meme["file_path"]))
+                self.storage.load_stickers_data()
+                await event.send(
+                    MessageChain().message(f"已删除表情包: {meme['meme_id']}")
+                )
+                return
 
         await event.send(MessageChain().message(f"删除失败: {meme['meme_id']}"))
 
