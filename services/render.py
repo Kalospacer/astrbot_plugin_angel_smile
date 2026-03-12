@@ -50,7 +50,6 @@ class StickerRenderer:
 
     async def render_text(self, text: str) -> list:
         """渲染文本，支持 :tag1:tag2: 组合匹配"""
-        logger.info(f"[AngelSmile] render_text 开始处理，接收到的 text: {text}")
         components = []
         try:
             # 匹配 :tag1:tag2: 格式（连续多个标签）
@@ -60,7 +59,7 @@ class StickerRenderer:
 
             for match in pattern.finditer(text):
                 matched_tag = match.group(0)
-                logger.info(f"[AngelSmile] 正则匹配到标签: {matched_tag}")
+                logger.debug("[AngelSmile] render_text 匹配到标签串")
 
                 if match.start() > last_end:
                     components.append(Plain(text[last_end : match.start()]))
@@ -69,16 +68,16 @@ class StickerRenderer:
 
                 if tags:
                     matched_memes = self.storage.get_memes_by_tags(tags)
-                    logger.info(f"[AngelSmile] 查询结果: {len(matched_memes)} 个表情包")
+                    logger.debug(
+                        f"[AngelSmile] render_text 查询结果: {len(matched_memes)} 个表情包"
+                    )
 
                     if matched_memes:
                         meme_data = random.choice(matched_memes)
                         if meme_data and meme_data.get("file_path"):
                             file_path = meme_data["file_path"]
                             meme_id = meme_data.get("meme_id")
-                            logger.info(
-                                f"[AngelSmile] 成功替换，使用的文件路径: {file_path}"
-                            )
+                            logger.debug("[AngelSmile] render_text 命中表情包并替换")
                             components.append(Image.fromFileSystem(file_path))
                             if meme_id:
                                 self.storage.increment_usage_count(meme_id)
@@ -96,6 +95,6 @@ class StickerRenderer:
 
         except Exception as exc:
             logger.error(f"AngelSmile: 处理表情标签时出错: {exc}", exc_info=True)
-            components.append(Plain(text))
+            return [Plain(text)]
 
         return components

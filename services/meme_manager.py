@@ -134,6 +134,18 @@ class MemeManager:
             return False
         return any(marker in text_lower for marker in FALLBACK_REVIEW_POSITIVE_MARKERS)
 
+    @staticmethod
+    def _parse_should_steal(raw_value) -> bool:
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, str):
+            normalized = raw_value.strip().lower()
+            if normalized in {"true", "1", "yes"}:
+                return True
+            if normalized in {"false", "0", "no"}:
+                return False
+        return False
+
     async def review_image(self, image_url: str) -> dict:
         """
         使用 LLM 审查图片是否是表情包
@@ -169,7 +181,9 @@ class MemeManager:
                 try:
                     result = json.loads(json_match.group())
                     return {
-                        "should_steal": bool(result.get("should_steal", False)),
+                        "should_steal": self._parse_should_steal(
+                            result.get("should_steal", False)
+                        ),
                         "reason": str(result.get("reason", "未知")),
                         "tags": list(result.get("tags", []))
                         if isinstance(result.get("tags"), list)
@@ -200,7 +214,12 @@ class MemeManager:
             }
 
     async def save_with_tags(
-        self, image_url: str, tags: list, source_group: str, source_user: str
+        self,
+        image_url: str,
+        tags: list,
+        source_group: str,
+        source_user: str,
+        max_stickers: int | None = None,
     ) -> dict:
         """
         保存图片并打上指定标签
@@ -252,6 +271,15 @@ class MemeManager:
                 source_info += f"_user:{source_user}"
 
             async with self.write_lock:
+                if max_stickers is not None:
+                    current_count = self.storage.get_sticker_count()
+                    if current_count >= max_stickers:
+                        return {
+                            "success": False,
+                            "meme_id": "",
+                            "message": f"当前表情包数量已达到上限 ({max_stickers})",
+                        }
+
                 duplicate = self.dedup.find_similar_duplicate(temp_file_path)
                 if duplicate is not None:
                     logger.info(
@@ -347,14 +375,18 @@ class MemeManager:
                     distance=duplicate.distance,
                 ).to_message()
 
-            result = self.storage.save_meme(
-                source_file=Path(raw_path),
-                category=final_category,
-                description=final_description,
-                reason=reason,
-                save_name=save_name,
-                overwrite_description=overwrite_description,
-            )
+            try:
+                result = self.storage.save_meme(
+                    source_file=Path(raw_path),
+                    category=final_category,
+                    description=final_description,
+                    reason=reason,
+                    save_name=save_name,
+                    overwrite_description=overwrite_description,
+                )
+            except Exception as exc:
+                logger.error(f"AngelSmile: 手动偷图保存失败: {exc}", exc_info=True)
+                return f"保存失败: {exc}"
             self.dedup.register_file(result.saved_file)
 
         return result.to_tool_result().to_message()
