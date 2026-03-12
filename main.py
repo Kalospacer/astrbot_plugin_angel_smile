@@ -278,7 +278,7 @@ class AngelSmilePlugin(Star):
         try:
             max_stickers = self.config.get("max_stickers", 100)
             current_count = self.storage.get_sticker_count()
-            if current_count >= max_stickers:
+            if max_stickers is not None and current_count >= max_stickers:
                 logger.info(
                     f"[AngelSmile] 当前表情包数量 ({current_count}) 已达到上限 ({max_stickers})，跳过偷图"
                 )
