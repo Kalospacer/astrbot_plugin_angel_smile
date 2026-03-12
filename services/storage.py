@@ -48,6 +48,17 @@ class MemeStorage:
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
+    def _row_to_meme(self, row: sqlite3.Row) -> dict[str, Any]:
+        """将数据库行记录转换为表情包字典。"""
+        return {
+            "meme_id": row["meme_id"],
+            "file_path": str(self._to_absolute_storage_path(row["file_path"])),
+            "tags": json.loads(row["tags"]),
+            "source": row["source"],
+            "usage_count": row["usage_count"],
+            "added_time": row["added_time"],
+        }
+
     def _close_connection(self) -> None:
         """关闭数据库连接"""
         if self._conn is not None:
@@ -110,7 +121,10 @@ class MemeStorage:
                             dirs_exist_ok=True,
                         )
 
-        # 扫描现有文件并同步到数据库
+        # 启动时先清理空目录，再扫描现有文件并同步到数据库
+        removed_empty_dirs = self._cleanup_empty_sticker_dirs()
+        if removed_empty_dirs > 0:
+            logger.info(f"AngelSmile: 启动时清理了 {removed_empty_dirs} 个空表情包目录")
         self._sync_files_to_database()
 
         self.load_stickers_data()
@@ -260,6 +274,51 @@ class MemeStorage:
                             cursor.execute(
                                 "DELETE FROM tag_index WHERE tag = ?", (tag,)
                             )
+
+    def _remove_empty_parent_dirs(self, file_path: Path) -> None:
+        """删除 stickers_dir 下已空的父目录。"""
+        current = file_path.parent
+        stickers_root = self.paths.stickers_dir.resolve()
+
+        while current != stickers_root and stickers_root in current.parents:
+            try:
+                next(current.iterdir())
+            except StopIteration:
+                current.rmdir()
+                current = current.parent
+                continue
+            except OSError as exc:
+                logger.warning(f"AngelSmile: 删除空目录失败: {current}, {exc}")
+            break
+
+    def _cleanup_empty_sticker_dirs(self) -> int:
+        """启动时删除 stickers_dir 下的空目录。"""
+        if not self.paths.stickers_dir.exists():
+            return 0
+
+        removed_count = 0
+        for directory in sorted(
+            (path for path in self.paths.stickers_dir.rglob("*") if path.is_dir()),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        ):
+            try:
+                next(directory.iterdir())
+            except StopIteration:
+                directory.rmdir()
+                removed_count += 1
+            except OSError as exc:
+                logger.warning(f"AngelSmile: 删除空目录失败: {directory}, {exc}")
+        return removed_count
+
+    def _delete_file_from_storage(self, file_path: str | Path) -> None:
+        full_path = self._to_absolute_storage_path(file_path)
+        try:
+            full_path.unlink(missing_ok=True)
+            self._remove_empty_parent_dirs(full_path)
+            logger.info(f"AngelSmile: 已删除表情包文件: {full_path}")
+        except Exception as exc:
+            logger.warning(f"AngelSmile: 删除表情包文件失败: {exc}")
 
     def load_stickers_data(self) -> dict[str, str]:
         """加载分类数据（从数据库的 tags 中提取）"""
@@ -488,16 +547,7 @@ class MemeStorage:
             if row is None:
                 continue
 
-            results.append(
-                {
-                    "meme_id": row["meme_id"],
-                    "file_path": str(self._to_absolute_storage_path(row["file_path"])),
-                    "tags": json.loads(row["tags"]),
-                    "source": row["source"],
-                    "usage_count": row["usage_count"],
-                    "added_time": row["added_time"],
-                }
-            )
+            results.append(self._row_to_meme(row))
 
         return results
 
@@ -548,14 +598,22 @@ class MemeStorage:
         if row is None:
             return None
 
-        return {
-            "meme_id": row["meme_id"],
-            "file_path": str(self._to_absolute_storage_path(row["file_path"])),
-            "tags": json.loads(row["tags"]),
-            "source": row["source"],
-            "usage_count": row["usage_count"],
-            "added_time": row["added_time"],
-        }
+        return self._row_to_meme(row)
+
+    def get_meme_by_file_path(self, file_path: str | Path) -> dict[str, Any] | None:
+        """根据文件路径获取表情包。支持绝对路径或相对路径。"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            relative_path = self._to_relative_storage_path(file_path)
+        except ValueError:
+            return None
+        cursor.execute("SELECT * FROM memes WHERE file_path = ?", (relative_path,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        return self._row_to_meme(row)
 
     def increment_usage_count(self, meme_id: str) -> bool:
         """增加表情包使用次数。"""
@@ -691,17 +749,38 @@ class MemeStorage:
 
             conn.commit()
 
-            try:
-                full_path = self._to_absolute_storage_path(file_path)
-                full_path.unlink(missing_ok=True)
-                logger.info(f"AngelSmile: 已删除表情包文件: {full_path}")
-            except Exception as exc:
-                logger.warning(f"AngelSmile: 删除表情包文件失败: {exc}")
+            self._delete_file_from_storage(file_path)
 
             return True
         except Exception as exc:
             logger.error(f"AngelSmile: 删除表情包失败: {exc}")
             return False
+
+    def delete_all_memes_and_get_paths(self) -> list[str]:
+        """批量删除全部表情包并返回已删除记录的绝对路径。"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT file_path FROM memes ORDER BY added_time ASC")
+        file_paths = [self._to_absolute_storage_path(row["file_path"]) for row in cursor]
+
+        cursor.execute("DELETE FROM memes")
+        cursor.execute("DELETE FROM tag_index")
+        conn.commit()
+
+        for file_path in file_paths:
+            self._delete_file_from_storage(file_path)
+
+        self._cleanup_empty_sticker_dirs()
+        self.load_stickers_data()
+        return [str(path) for path in file_paths]
+
+    def get_all_memes(self) -> list[dict[str, Any]]:
+        """获取全部表情包记录。"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM memes ORDER BY added_time ASC")
+
+        return [self._row_to_meme(row) for row in cursor.fetchall()]
 
     def get_least_used_memes(self, count: int) -> list[dict[str, Any]]:
         """
@@ -721,22 +800,7 @@ class MemeStorage:
                 (count,),
             )
 
-            results = []
-            for row in cursor.fetchall():
-                results.append(
-                    {
-                        "meme_id": row["meme_id"],
-                        "file_path": str(
-                            self._to_absolute_storage_path(row["file_path"])
-                        ),
-                        "tags": json.loads(row["tags"]),
-                        "source": row["source"],
-                        "usage_count": row["usage_count"],
-                        "added_time": row["added_time"],
-                    }
-                )
-
-            return results
+            return [self._row_to_meme(row) for row in cursor.fetchall()]
         except Exception as exc:
             logger.error(f"AngelSmile: 获取最少使用表情包失败: {exc}")
             return []

@@ -29,5 +29,23 @@
     "hint": "每次自动清理时删除的调用次数最少的表情包数量",
     "type": "int",
     "default": 5
+  },
+  "enable_auto_cleanup": {
+    "description": "启用自动清理",
+    "hint": "关闭后不再按周期自动删除表情包。",
+    "type": "bool",
+    "default": true
+  },
+  "min_stickers_to_keep": {
+    "description": "最小保留表情包数量",
+    "hint": "自动清理时至少保留这么多表情包，不会删到低于这个数量。",
+    "type": "int",
+    "default": 0
+  },
+  "steal_all_images": {
+    "description": "偷取所有图片",
+    "hint": "开启后，所有图片都会进入自动偷图审查；关闭时仅自动偷取 NapCat 原始 image 段中带有 emoji_id、emoji_package_id 或 key 标记的图片。",
+    "type": "bool",
+    "default": false
   }
 }

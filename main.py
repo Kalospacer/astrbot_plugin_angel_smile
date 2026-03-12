@@ -1,8 +1,9 @@
 import asyncio
+from collections import defaultdict, deque
 from pathlib import Path
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Image, Plain
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools, register
@@ -22,10 +23,10 @@ from .tools.steal_meme import StealMemeTool
     "2.0.0",
 )
 class AngelSmilePlugin(Star):
-    def __init__(self, context: Context):
-        super().__init__(context)
+    def __init__(self, context: Context, config=None):
+        super().__init__(context, config)
         self.context = context
-        self.config = context.get_config()
+        self.config = config or {}
 
         plugin_dir = Path(__file__).resolve().parent
         data_dir = StarTools.get_data_dir()
@@ -39,7 +40,7 @@ class AngelSmilePlugin(Star):
         )
 
         self.storage = MemeStorage(paths)
-        self.manager = MemeManager(self.storage, context)
+        self.manager = MemeManager(self.storage, context, plugin_config=self.config)
         self.renderer = StickerRenderer(self.storage)
         self.steal_meme_tool = StealMemeTool(manager=self.manager)
 
@@ -48,9 +49,54 @@ class AngelSmilePlugin(Star):
 
         # 记录正在处理的 URL，防止重复
         self._processing_urls = set()
+        self._recent_sent_memes: dict[str, deque[dict[str, str]]] = defaultdict(
+            lambda: deque(maxlen=10)
+        )
 
         # 清理任务引用
         self._cleanup_task = None
+
+    @staticmethod
+    def _get_marked_emoji_urls(event: AstrMessageEvent) -> set[str]:
+        raw_message = getattr(event.message_obj, "raw_message", None)
+        raw_segments = getattr(raw_message, "message", None)
+        if not isinstance(raw_segments, list):
+            return set()
+
+        emoji_urls: set[str] = set()
+        for segment in raw_segments:
+            if not isinstance(segment, dict) or segment.get("type") != "image":
+                continue
+
+            data = segment.get("data", {})
+            if not isinstance(data, dict):
+                continue
+
+            if any(
+                data.get(field) is not None
+                for field in ("emoji_id", "emoji_package_id", "key")
+            ):
+                image_url = data.get("url")
+                if isinstance(image_url, str) and image_url:
+                    emoji_urls.add(image_url)
+
+        return emoji_urls
+
+    def _remember_sent_meme(self, event: AstrMessageEvent, image_path: str) -> None:
+        session_key = event.unified_msg_origin
+        recent_memes = self._recent_sent_memes[session_key]
+        meme = self.storage.get_meme_by_file_path(image_path)
+        if meme is None:
+            return
+
+        payload = {
+            "meme_id": str(meme["meme_id"]),
+            "name": Path(meme["file_path"]).stem,
+            "tags": ", ".join(meme["tags"]) if meme["tags"] else "无标签",
+        }
+        if recent_memes and recent_memes[-1]["meme_id"] == payload["meme_id"]:
+            return
+        recent_memes.append(payload)
 
     async def initialize(self):
         self.storage.initialize()
@@ -63,6 +109,10 @@ class AngelSmilePlugin(Star):
 
     def _start_cleanup_task(self):
         """启动自动清理后台任务"""
+        if not self.config.get("enable_auto_cleanup", True):
+            logger.info("AngelSmile: 自动清理已关闭（enable_auto_cleanup=false）")
+            return
+
         cleanup_interval = self.config.get("cleanup_interval_hours", 1)
         cleanup_count = self.config.get("cleanup_count", 5)
 
@@ -128,13 +178,28 @@ class AngelSmilePlugin(Star):
             # 获取使用统计
             stats = self.storage.get_usage_stats()
             total_count = stats.get("total_count", 0)
+            min_stickers_to_keep = max(
+                0, int(self.config.get("min_stickers_to_keep", 0) or 0)
+            )
 
             if total_count == 0:
                 logger.info("AngelSmile: 没有表情包需要清理")
                 return
 
+            if total_count <= min_stickers_to_keep:
+                logger.info(
+                    "AngelSmile: 当前表情包数量未超过最小保留数量，跳过清理 "
+                    f"({total_count} <= {min_stickers_to_keep})"
+                )
+                return
+
+            cleanup_limit = min(cleanup_count, total_count - min_stickers_to_keep)
+            if cleanup_limit <= 0:
+                logger.info("AngelSmile: 本次没有可清理的表情包")
+                return
+
             # 获取调用次数最少的表情包
-            least_used = self.storage.get_least_used_memes(cleanup_count)
+            least_used = self.storage.get_least_used_memes(cleanup_limit)
 
             if not least_used:
                 logger.info("AngelSmile: 没有找到可以清理的表情包")
@@ -172,10 +237,18 @@ class AngelSmilePlugin(Star):
         if not message_chain:
             return
 
+        steal_all_images = self.config.get("steal_all_images", False)
+        marked_emoji_urls = (
+            set() if steal_all_images else self._get_marked_emoji_urls(event)
+        )
+
         for item in message_chain:
             if isinstance(item, Image):
                 image_url = item.url or item.path
                 if not image_url:
+                    continue
+
+                if not steal_all_images and image_url not in marked_emoji_urls:
                     continue
 
                 # 内存去重
@@ -254,6 +327,79 @@ class AngelSmilePlugin(Star):
             else:
                 new_chain.append(item)
         result.chain = new_chain
+
+        for item in result.chain:
+            if isinstance(item, Image) and item.path:
+                self._remember_sent_meme(event, item.path)
+
+    @filter.command("smile_check")
+    async def check_meme(self, event: AstrMessageEvent, limit: int = 5) -> None:
+        limit = max(1, min(limit, 20))
+        session_key = event.unified_msg_origin
+        recent_memes = list(self._recent_sent_memes.get(session_key, []))
+        if not recent_memes:
+            await event.send(
+                MessageChain().message("当前会话里还没有机器人发出的表情包记录。")
+            )
+            return
+
+        recent_memes = list(reversed(recent_memes[-limit:]))
+        lines = [f"当前会话最近 {len(recent_memes)} 条机器人表情包记录："]
+        for index, meme in enumerate(recent_memes, start=1):
+            lines.append(
+                f"{index}. 名称={meme['name']} | meme_id={meme['meme_id']} | tag={meme['tags']}"
+            )
+
+        await event.send(MessageChain().message("\n".join(lines)))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("smile_delete")
+    async def delete_meme_command(
+        self, event: AstrMessageEvent, target: str = "", confirm: str = ""
+    ) -> None:
+        normalized_target = target.strip()
+        normalized_confirm = confirm.strip().lower()
+
+        if normalized_target.lower() == "all":
+            if normalized_confirm != "force":
+                await event.send(
+                    MessageChain().message(
+                        "删除全部表情包请使用: smile_delete all force"
+                    )
+                )
+                return
+
+            deleted_file_paths = self.storage.delete_all_memes_and_get_paths()
+            deleted_count = len(deleted_file_paths)
+            if deleted_count > 0:
+                self.manager.dedup.clear()
+            await event.send(
+                MessageChain().message(f"已删除全部表情包，共 {deleted_count} 项。")
+            )
+            return
+
+        if not normalized_target:
+            await event.send(
+                MessageChain().message(
+                    "请使用 smile_delete <id>，或使用 smile_delete all force 删除全部。"
+                )
+            )
+            return
+
+        meme = self.storage.get_meme_by_id(normalized_target)
+        if meme is None:
+            await event.send(
+                MessageChain().message(f"未找到 id={normalized_target} 的表情包。")
+            )
+            return
+
+        if self.storage.delete_meme(meme["meme_id"]):
+            self.manager.dedup.unregister_file(Path(meme["file_path"]))
+            self.storage.load_stickers_data()
+            await event.send(MessageChain().message(f"已删除表情包: {meme['meme_id']}"))
+            return
+
+        await event.send(MessageChain().message(f"删除失败: {meme['meme_id']}"))
 
     async def terminate(self):
         """插件停止时清理资源"""

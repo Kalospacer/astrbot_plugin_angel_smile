@@ -50,6 +50,15 @@ class DHashDedupService:
         self.index[str(file_path.resolve())] = image_hash
         self._persist_index()
 
+    def unregister_file(self, file_path: Path) -> None:
+        resolved = str(file_path.resolve())
+        if self.index.pop(resolved, None) is not None:
+            self._persist_index()
+
+    def clear(self) -> None:
+        self.index = {}
+        self._persist_index()
+
     def compute_dhash(self, image_path: Path) -> str:
         try:
             with Image.open(image_path) as image:
