@@ -1,15 +1,15 @@
 import os
 import re
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Optional
 
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .constants import DEFAULT_CATEGORY
 
 
-def normalize_category_name(category: Optional[str]) -> str:
+def normalize_category_name(category: str | None) -> str:
     text = (category or "").strip().lower()
     if not text:
         return DEFAULT_CATEGORY
@@ -19,7 +19,7 @@ def normalize_category_name(category: Optional[str]) -> str:
     return text or DEFAULT_CATEGORY
 
 
-def safe_filename(name: Optional[str], suffix: str) -> str:
+def safe_filename(name: str | None, suffix: str) -> str:
     base = (name or "").strip()
     if base:
         base = Path(base).name
@@ -34,7 +34,9 @@ def resolve_user_path(raw_path: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(raw_path))).resolve()
 
 
-def get_allowed_image_roots(extra_roots: Optional[Iterable[Path]] = None) -> tuple[Path, ...]:
+def get_allowed_image_roots(
+    extra_roots: Iterable[Path] | None = None,
+) -> tuple[Path, ...]:
     roots = {
         Path(get_astrbot_data_path()).resolve(),
         Path.cwd().resolve(),

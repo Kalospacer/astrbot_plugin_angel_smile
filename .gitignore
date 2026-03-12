@@ -1,3 +1,35 @@
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Runtime data and temporary files
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Test / build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local notes not intended for release packaging
+plan.md
 

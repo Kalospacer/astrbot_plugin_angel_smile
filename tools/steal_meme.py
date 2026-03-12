@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, Protocol
+from typing import Protocol
 
 from astrbot.api import FunctionTool
 from astrbot.api.event import AstrMessageEvent
@@ -12,8 +12,8 @@ class MemeManagerProtocol(Protocol):
         self,
         image_path: str,
         category: str,
-        description: Optional[str] = None,
-        save_name: Optional[str] = None,
+        description: str | None = None,
+        save_name: str | None = None,
     ) -> str: ...
 
 
@@ -29,10 +29,22 @@ class StealMemeTool(FunctionTool):
         default_factory=lambda: {
             "type": "object",
             "properties": {
-                "image_path": {"type": "string", "description": "本地图片绝对路径或相对路径。"},
-                "category": {"type": "string", "description": "必填，要保存到的表情分类名。"},
-                "description": {"type": "string", "description": "可选，该分类的中文用途描述；仅在新建分类时会写入。"},
-                "save_name": {"type": "string", "description": "可选，保存后的文件名，不含路径。"},
+                "image_path": {
+                    "type": "string",
+                    "description": "本地图片绝对路径或相对路径。",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "必填，要保存到的表情分类名。",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "可选，该分类的中文用途描述；仅在新建分类时会写入。",
+                },
+                "save_name": {
+                    "type": "string",
+                    "description": "可选，保存后的文件名，不含路径。",
+                },
             },
             "required": ["image_path", "category"],
         }
@@ -43,8 +55,8 @@ class StealMemeTool(FunctionTool):
         event: AstrMessageEvent,
         image_path: str,
         category: str,
-        description: Optional[str] = None,
-        save_name: Optional[str] = None,
+        description: str | None = None,
+        save_name: str | None = None,
     ) -> str:
         _ = event
         if self.manager is None:

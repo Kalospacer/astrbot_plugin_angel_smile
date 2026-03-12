@@ -1,7 +1,6 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
 
 from PIL import Image, UnidentifiedImageError
 
@@ -20,13 +19,13 @@ class DHashDedupService:
         self.storage = storage
         self.threshold = threshold
         self.index_path = self.storage.paths.data_dir / "image_dhash_index.json"
-        self.index: Dict[str, str] = {}
+        self.index: dict[str, str] = {}
 
     def initialize(self) -> None:
         self.index = self._load_index()
         self._rebuild_missing_entries()
 
-    def find_similar_duplicate(self, source_file: Path) -> Optional[DuplicateMatch]:
+    def find_similar_duplicate(self, source_file: Path) -> DuplicateMatch | None:
         candidate_hash = self.compute_dhash(source_file)
         if not candidate_hash:
             return None
@@ -80,16 +79,18 @@ class DHashDedupService:
         max_len = max(len(left), len(right))
         left_bits = bin(int(left, 16))[2:].zfill(max_len * 4)
         right_bits = bin(int(right, 16))[2:].zfill(max_len * 4)
-        return sum(bit_left != bit_right for bit_left, bit_right in zip(left_bits, right_bits))
+        return sum(
+            bit_left != bit_right for bit_left, bit_right in zip(left_bits, right_bits)
+        )
 
-    def _load_index(self) -> Dict[str, str]:
+    def _load_index(self) -> dict[str, str]:
         if not self.index_path.exists():
             return {}
         try:
             raw_data = json.loads(self.index_path.read_text(encoding="utf-8"))
             if not isinstance(raw_data, dict):
                 return {}
-            normalized: Dict[str, str] = {}
+            normalized: dict[str, str] = {}
             for raw_key, raw_value in raw_data.items():
                 if isinstance(raw_key, str) and isinstance(raw_value, str):
                     normalized[str(Path(raw_key).resolve())] = raw_value
@@ -100,7 +101,9 @@ class DHashDedupService:
 
     def _rebuild_missing_entries(self) -> None:
         changed = False
-        existing_files = {str(path.resolve()) for path in self.storage.iter_all_sticker_files()}
+        existing_files = {
+            str(path.resolve()) for path in self.storage.iter_all_sticker_files()
+        }
 
         for indexed_file in list(self.index):
             if indexed_file not in existing_files:
