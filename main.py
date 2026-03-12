@@ -277,6 +277,12 @@ class AngelSmilePlugin(Star):
         """LLM 审查图片并决定是否偷图"""
         try:
             max_stickers = self.config.get("max_stickers", 100)
+            current_count = self.storage.get_sticker_count()
+            if current_count >= max_stickers:
+                logger.info(
+                    f"[AngelSmile] 当前表情包数量 ({current_count}) 已达到上限 ({max_stickers})，跳过偷图"
+                )
+                return
 
             # 调用 LLM 审查
             review_result = await self.manager.review_image(image_url)
