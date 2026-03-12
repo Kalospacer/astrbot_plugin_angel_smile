@@ -20,8 +20,29 @@ class MemeStorage:
         self.db_path: Path = paths.data_dir / "memes.db"
         self._conn: sqlite3.Connection | None = None
 
+    def _to_relative_storage_path(self, file_path: str | Path) -> str:
+        """将文件路径标准化为相对于 stickers_dir 的相对路径。"""
+        path = Path(file_path)
+        if not path.is_absolute():
+            return str(path).replace("\\", "/")
+
+        try:
+            relative_path = path.resolve().relative_to(
+                self.paths.stickers_dir.resolve()
+            )
+        except ValueError as exc:
+            raise ValueError(f"文件路径不在表情包目录内: {file_path}") from exc
+        return str(relative_path).replace("\\", "/")
+
+    def _to_absolute_storage_path(self, file_path: str | Path) -> Path:
+        """将数据库中的相对路径还原为绝对路径。"""
+        path = Path(file_path)
+        if path.is_absolute():
+            return path
+        return (self.paths.stickers_dir / path).resolve()
+
     def _get_connection(self) -> sqlite3.Connection:
-        """获取数据库连接，延迟初始化"""
+
         if self._conn is None:
             self._conn = sqlite3.connect(str(self.db_path))
             self._conn.row_factory = sqlite3.Row
@@ -147,29 +168,25 @@ class MemeStorage:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # 获取数据库中已有的文件路径
         cursor.execute("SELECT file_path FROM memes")
         existing_paths: set[str] = {row[0] for row in cursor.fetchall()}
 
-        # 扫描文件系统
         current_paths: set[str] = set()
         for file_path in self.paths.stickers_dir.rglob("*"):
             if (
                 file_path.is_file()
                 and file_path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
             ):
-                current_paths.add(str(file_path))
+                current_paths.add(self._to_relative_storage_path(file_path))
 
-        # 添加新文件
         for file_path in current_paths - existing_paths:
-            rel_path = Path(file_path).relative_to(self.paths.stickers_dir)
+            rel_path = Path(file_path)
             category = rel_path.parts[0] if len(rel_path.parts) > 1 else "unsorted"
-            meme_id = f"{category}_{Path(file_path).stem}_{int(time.time() * 1000)}"
+            meme_id = f"{category}_{rel_path.stem}_{int(time.time() * 1000)}"
             self._save_meme_internal(
                 cursor, meme_id, file_path, [category], "synced", 0, time.time()
             )
 
-        # 删除数据库中不存在的文件记录
         for file_path in existing_paths - current_paths:
             self._delete_meme_internal(cursor, file_path)
 
@@ -325,21 +342,20 @@ class MemeStorage:
 
         file_path = random.choice(rows)[0]
 
-        # 更新使用次数
         cursor.execute(
             "UPDATE memes SET usage_count = usage_count + 1 WHERE file_path = ?",
             (file_path,),
         )
         conn.commit()
 
-        return file_path
+        return str(self._to_absolute_storage_path(file_path))
 
     def iter_all_sticker_files(self) -> list[Path]:
         """获取所有表情包文件路径"""
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT file_path FROM memes")
-        return [Path(row[0]) for row in cursor.fetchall()]
+        return [self._to_absolute_storage_path(row[0]) for row in cursor.fetchall()]
 
     def get_sticker_count(self) -> int:
         """获取当前表情包总数"""
@@ -420,8 +436,9 @@ class MemeStorage:
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
+            relative_path = self._to_relative_storage_path(file_path)
             self._save_meme_internal(
-                cursor, meme_id, file_path, tags, source, 0, time.time()
+                cursor, meme_id, relative_path, tags, source, 0, time.time()
             )
             conn.commit()
             return True
@@ -460,7 +477,7 @@ class MemeStorage:
             results.append(
                 {
                     "meme_id": row["meme_id"],
-                    "file_path": row["file_path"],
+                    "file_path": str(self._to_absolute_storage_path(row["file_path"])),
                     "tags": json.loads(row["tags"]),
                     "source": row["source"],
                     "usage_count": row["usage_count"],
@@ -519,7 +536,7 @@ class MemeStorage:
 
         return {
             "meme_id": row["meme_id"],
-            "file_path": row["file_path"],
+            "file_path": str(self._to_absolute_storage_path(row["file_path"])),
             "tags": json.loads(row["tags"]),
             "source": row["source"],
             "usage_count": row["usage_count"],
@@ -639,10 +656,8 @@ class MemeStorage:
             file_path = row["file_path"]
             tags = json.loads(row["tags"])
 
-            # 从 memes 表删除
             cursor.execute("DELETE FROM memes WHERE meme_id = ?", (meme_id,))
 
-            # 更新 tag_index
             for tag in tags:
                 cursor.execute("SELECT meme_ids FROM tag_index WHERE tag = ?", (tag,))
                 tag_row = cursor.fetchone()
@@ -662,11 +677,8 @@ class MemeStorage:
 
             conn.commit()
 
-            # 删除物理文件
             try:
-                full_path = Path(file_path)
-                if not full_path.is_absolute():
-                    full_path = self.paths.stickers_dir / file_path
+                full_path = self._to_absolute_storage_path(file_path)
                 full_path.unlink(missing_ok=True)
                 logger.info(f"AngelSmile: 已删除表情包文件: {full_path}")
             except Exception as exc:
@@ -700,7 +712,9 @@ class MemeStorage:
                 results.append(
                     {
                         "meme_id": row["meme_id"],
-                        "file_path": row["file_path"],
+                        "file_path": str(
+                            self._to_absolute_storage_path(row["file_path"])
+                        ),
                         "tags": json.loads(row["tags"]),
                         "source": row["source"],
                         "usage_count": row["usage_count"],

@@ -87,21 +87,35 @@ class AngelSmilePlugin(Star):
             interval_hours: 清理间隔（小时）
             cleanup_count: 每次清理数量
         """
+        failure_count = 0
+        retry_delay_seconds = 60
+        max_retry_delay_seconds = 3600
+        max_failures_before_warning = 5
+
         while True:
             try:
-                # 等待指定时间
                 await asyncio.sleep(interval_hours * 3600)
-
-                # 执行清理
                 await self._perform_cleanup(cleanup_count)
+                failure_count = 0
+                retry_delay_seconds = 60
 
             except asyncio.CancelledError:
                 logger.info("AngelSmile: 清理任务已取消")
                 break
             except Exception as exc:
-                logger.error(f"AngelSmile: 清理任务执行失败: {exc}")
-                # 出错后继续等待下一轮
-                await asyncio.sleep(60)  # 出错后等待1分钟再试
+                failure_count += 1
+                log_message = (
+                    f"AngelSmile: 清理任务执行失败（第 {failure_count} 次）: {exc}"
+                )
+                if failure_count >= max_failures_before_warning:
+                    logger.error(log_message, exc_info=True)
+                else:
+                    logger.warning(log_message)
+
+                await asyncio.sleep(retry_delay_seconds)
+                retry_delay_seconds = min(
+                    retry_delay_seconds * 2, max_retry_delay_seconds
+                )
 
     async def _perform_cleanup(self, cleanup_count: int):
         """

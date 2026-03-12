@@ -1,5 +1,9 @@
+import json
 import os
+import re
+import shutil
 import tempfile
+import time
 from asyncio import Lock
 from pathlib import Path
 from urllib.parse import urlparse
@@ -62,16 +66,13 @@ class MemeManager:
             return None
 
         try:
-            # 获取 provider_id 配置
             config = self.context.get_config()
             provider_id = config.get("tag_provider_id", "") if config else ""
 
             if provider_id:
                 provider = self.context.provider_manager.get_provider_by_id(provider_id)
             else:
-                # 使用默认 provider
-                prov = self.context.get_using_provider()
-                provider = prov if prov else None
+                provider = self.context.get_using_provider() or None
 
             return provider
         except Exception as exc:
@@ -118,7 +119,6 @@ class MemeManager:
 
         try:
             prompt = self._get_review_prompt()
-
             response = await provider.text_chat(
                 prompt=prompt,
                 image_urls=[image_url],
@@ -129,11 +129,6 @@ class MemeManager:
 
             result_text = response.completion_text.strip()
 
-            # 尝试解析 JSON
-            import json
-            import re
-
-            # 尝试从文本中提取 JSON
             json_match = re.search(r"\{[^}]*\}", result_text, re.DOTALL)
             if json_match:
                 try:
@@ -148,7 +143,6 @@ class MemeManager:
                 except json.JSONDecodeError:
                     pass
 
-            # 如果 JSON 解析失败，根据关键词判断
             text_lower = result_text.lower()
             should_steal = any(
                 keyword in text_lower
@@ -161,12 +155,8 @@ class MemeManager:
                 ]
             )
 
-            # 尝试提取标签
             tags = []
             if should_steal:
-                # 简单提取可能的标签（逗号分隔的短语）
-                import re
-
                 tag_matches = re.findall(r'["\']([^"\']{2,10})["\']', result_text)
                 tags = tag_matches[:4] if tag_matches else ["未分类"]
 
@@ -202,12 +192,10 @@ class MemeManager:
         temp_file_path: Path | None = None
 
         try:
-            # 1. 异步下载图片
             temp_file_path = await self._download_image(image_url)
             if temp_file_path is None:
                 return {"success": False, "meme_id": "", "message": "下载图片失败"}
 
-            # 2. DHash 去重检查
             async with self.write_lock:
                 duplicate = self.dedup.find_similar_duplicate(temp_file_path)
                 if duplicate is not None:
@@ -221,30 +209,22 @@ class MemeManager:
                         "message": f"图片已存在: {duplicate.matched_file}",
                     }
 
-            # 3. 处理标签
             if not tags or not isinstance(tags, list):
                 tags = ["未分类", "自动导入"]
 
-            # 清理标签
             tags = [str(tag).strip() for tag in tags if tag and str(tag).strip()]
-            tags = tags[:4]  # 最多 4 个标签
-            tags = [tag for tag in tags if len(tag) <= 10]  # 过滤过长的标签
-
-            if len(tags) < 1:
+            tags = tags[:4]
+            tags = [tag for tag in tags if len(tag) <= 10]
+            if not tags:
                 tags = ["未分类"]
-
-            # 4. 生成 meme_id 和保存路径
-            import time
 
             file_suffix = Path(urlparse(image_url).path).suffix.lower()
             if file_suffix not in SUPPORTED_IMAGE_SUFFIXES:
-                file_suffix = ".jpg"  # 默认后缀
+                file_suffix = ".jpg"
 
-            # 使用第一个标签作为主分类
-            primary_category = tags[0] if tags else "未分类"
+            primary_category = tags[0]
             normalized_category = normalize_category_name(primary_category)
 
-            # 生成唯一文件名
             timestamp = int(time.time() * 1000)
             random_suffix = os.urandom(4).hex()
             file_name = f"auto_{timestamp}_{random_suffix}{file_suffix}"
@@ -253,16 +233,11 @@ class MemeManager:
             target_dir.mkdir(parents=True, exist_ok=True)
             target_file = target_dir / file_name
 
-            # 5. 移动文件到目标位置
-            import shutil
-
             shutil.move(str(temp_file_path), str(target_file))
-            temp_file_path = None  # 已移动，不需要清理
+            temp_file_path = None
 
-            # 6. 生成 meme_id
             meme_id = f"{normalized_category}_{timestamp}_{random_suffix}"
 
-            # 7. 保存到数据库
             source_info = "auto_steal"
             if source_group:
                 source_info += f"_group:{source_group}"
@@ -275,9 +250,7 @@ class MemeManager:
                 tags=tags,
                 source=source_info,
             )
-
             if not success:
-                # 保存失败，删除已移动的文件
                 target_file.unlink(missing_ok=True)
                 return {
                     "success": False,
@@ -285,9 +258,7 @@ class MemeManager:
                     "message": "保存表情包到数据库失败",
                 }
 
-            # 8. 注册到去重索引
             self.dedup.register_file(target_file)
-
             logger.info(f"AngelSmile: 保存表情包成功，meme_id={meme_id}, tags={tags}")
             return {
                 "success": True,
@@ -299,7 +270,6 @@ class MemeManager:
             logger.error(f"AngelSmile: 保存表情包失败: {exc}", exc_info=True)
             return {"success": False, "meme_id": "", "message": f"保存失败: {str(exc)}"}
         finally:
-            # 确保临时文件被清理
             if temp_file_path is not None:
                 self._cleanup_temp_file(temp_file_path)
 
@@ -363,109 +333,6 @@ class MemeManager:
 
         return result.to_tool_result().to_message()
 
-    async def auto_steal_and_tag(
-        self,
-        image_url: str,
-        source_group: str | None = None,
-        source_user: str | None = None,
-    ) -> str:
-        """
-        自动偷图并打标
-
-        Args:
-            image_url: 图片 URL
-            source_group: 来源群组
-            source_user: 来源用户
-
-        Returns:
-            meme_id 或错误信息
-        """
-        temp_file_path: Path | None = None
-
-        try:
-            # 1. 异步下载图片
-            temp_file_path = await self._download_image(image_url)
-            if temp_file_path is None:
-                return "下载图片失败"
-
-            # 2. DHash 去重检查
-            async with self.write_lock:
-                duplicate = self.dedup.find_similar_duplicate(temp_file_path)
-                if duplicate is not None:
-                    logger.info(
-                        f"AngelSmile: 图片已存在，跳过保存: {duplicate.matched_file}"
-                    )
-                    # 清理临时文件
-                    self._cleanup_temp_file(temp_file_path)
-                    return f"DUPLICATE:{duplicate.matched_file}"
-
-            # 3. 调用 LLM 生成标签
-            tags = await self._generate_tags_with_llm(image_url)
-            if not tags:
-                tags = ["未分类", "自动导入"]
-
-            # 4. 生成 meme_id 和保存路径
-            import time
-
-            file_suffix = Path(urlparse(image_url).path).suffix.lower()
-            if file_suffix not in SUPPORTED_IMAGE_SUFFIXES:
-                file_suffix = ".jpg"  # 默认后缀
-
-            # 使用第一个标签作为主分类
-            primary_category = tags[0] if tags else "未分类"
-            normalized_category = normalize_category_name(primary_category)
-
-            # 生成唯一文件名
-            timestamp = int(time.time() * 1000)
-            random_suffix = os.urandom(4).hex()
-            file_name = f"auto_{timestamp}_{random_suffix}{file_suffix}"
-
-            target_dir = self.storage.paths.stickers_dir / normalized_category
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_file = target_dir / file_name
-
-            # 5. 移动文件到目标位置
-            import shutil
-
-            shutil.move(str(temp_file_path), str(target_file))
-            temp_file_path = None  # 已移动，不需要清理
-
-            # 6. 生成 meme_id
-            meme_id = f"{normalized_category}_{timestamp}_{random_suffix}"
-
-            # 7. 保存到数据库
-            source_info = "auto_steal"
-            if source_group:
-                source_info += f"_group:{source_group}"
-            if source_user:
-                source_info += f"_user:{source_user}"
-
-            success = self.storage.save_meme_with_tags(
-                meme_id=meme_id,
-                file_path=str(target_file),
-                tags=tags,
-                source=source_info,
-            )
-
-            if not success:
-                # 保存失败，删除已移动的文件
-                target_file.unlink(missing_ok=True)
-                return "保存表情包到数据库失败"
-
-            # 8. 注册到去重索引
-            self.dedup.register_file(target_file)
-
-            logger.info(f"AngelSmile: 自动偷图成功，meme_id={meme_id}, tags={tags}")
-            return meme_id
-
-        except Exception as exc:
-            logger.error(f"AngelSmile: 自动偷图失败: {exc}", exc_info=True)
-            return f"ERROR:{str(exc)}"
-        finally:
-            # 确保临时文件被清理
-            if temp_file_path is not None:
-                self._cleanup_temp_file(temp_file_path)
-
     async def _generate_tags_with_llm(self, image_url: str) -> list[str]:
         """
         使用 LLM 分析表情包并生成标签
@@ -481,20 +348,17 @@ class MemeManager:
             return ["未分类", "自动导入"]
 
         try:
-            # 构造 prompt
             prompt = f"""分析这个表情包，给出 2-4 个最准确的标签。
 标签要求：简短精准（2-4字），描述情绪/动作/场景
 常见标签：开心、无语、可爱、沙雕、摸鱼、猫猫、狗狗
 表情包URL: {image_url}
 只输出标签，用逗号分隔，如：开心,可爱,猫猫"""
 
-            # 调用 LLM
             response = await provider.text_chat(
                 prompt=prompt,
                 image_urls=[image_url],
             )
 
-            # 解析返回结果
             if response is None or not hasattr(response, "completion_text"):
                 logger.warning("AngelSmile: LLM 返回结果为空")
                 return ["未分类", "自动导入"]
@@ -503,14 +367,10 @@ class MemeManager:
             if not result_text:
                 return ["未分类", "自动导入"]
 
-            # 解析标签（逗号分隔）
             tags = [tag.strip() for tag in result_text.split(",") if tag.strip()]
+            tags = tags[:4]
+            tags = [tag for tag in tags if len(tag) <= 10]
 
-            # 过滤和限制标签数量
-            tags = tags[:4]  # 最多 4 个标签
-            tags = [tag for tag in tags if len(tag) <= 10]  # 过滤过长的标签
-
-            # 保底：至少返回 2 个默认标签
             if len(tags) < 2:
                 default_tags = ["未分类", "自动导入"]
                 tags.extend(default_tags[: 2 - len(tags)])
@@ -532,31 +392,27 @@ class MemeManager:
             临时文件路径，失败返回 None
         """
         try:
-            # 确定文件后缀
             parsed_url = urlparse(image_url)
             file_suffix = Path(parsed_url.path).suffix.lower()
             if file_suffix not in SUPPORTED_IMAGE_SUFFIXES:
-                file_suffix = ".jpg"  # 默认后缀
+                file_suffix = ".jpg"
 
-            # 创建临时文件
             temp_dir = Path(tempfile.gettempdir()) / "angel_smile"
             temp_dir.mkdir(parents=True, exist_ok=True)
 
             temp_file = temp_dir / f"download_{os.urandom(8).hex()}{file_suffix}"
 
-            # 使用 aiohttp 下载
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(image_url, ssl=False) as response:
+                async with session.get(image_url) as response:
                     if response.status != 200:
                         logger.warning(
                             f"AngelSmile: 下载图片失败，状态码: {response.status}"
                         )
                         return None
 
-                    # 读取内容并保存
                     content = await response.read()
-                    if not content or len(content) < 100:  # 过滤过小的文件
+                    if not content or len(content) < 100:
                         logger.warning("AngelSmile: 下载的图片内容过小或为空")
                         return None
 
