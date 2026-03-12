@@ -24,9 +24,10 @@ class StickerRenderer:
             return ""
 
         # 按使用频率排序（有索引的表情包数量）
+        tag_index = self.storage.get_tag_index()
         tag_counts = []
         for tag in all_tags:
-            meme_ids = self.storage.get_tag_index().get(tag, [])
+            meme_ids = tag_index.get(tag, [])
             tag_counts.append((tag, len(meme_ids)))
 
         # 按数量降序，取前 30 个

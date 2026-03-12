@@ -138,6 +138,8 @@ class MemeManager:
     def _parse_should_steal(raw_value) -> bool:
         if isinstance(raw_value, bool):
             return raw_value
+        if isinstance(raw_value, (int, float)):
+            return raw_value != 0
         if isinstance(raw_value, str):
             normalized = raw_value.strip().lower()
             if normalized in {"true", "1", "yes"}:
