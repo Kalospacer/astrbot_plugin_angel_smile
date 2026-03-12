@@ -526,6 +526,21 @@ class MemeStorage:
             "added_time": row["added_time"],
         }
 
+    def increment_usage_count(self, meme_id: str) -> bool:
+        """增加表情包使用次数。"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE memes SET usage_count = usage_count + 1 WHERE meme_id = ?",
+                (meme_id,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as exc:
+            logger.error(f"AngelSmile: 更新表情包使用次数失败: {exc}")
+            return False
+
     def update_meme_tags(self, meme_id: str, tags: list[str]) -> bool:
         """
         更新表情包标签

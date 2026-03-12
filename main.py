@@ -3,14 +3,16 @@ from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import Image, Plain
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools, register
-from astrbot.core.message.components import Image, Plain
-from astrbot.core.provider.entities import ProviderRequest
 
+from .constants import STEAL_TOOL_NAME
 from .models import PluginPaths
 from .services.meme_manager import MemeManager
 from .services.render import StickerRenderer
 from .services.storage import MemeStorage
+from .tools.steal_meme import StealMemeTool
 
 
 @register(
@@ -22,6 +24,7 @@ from .services.storage import MemeStorage
 class AngelSmilePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        self.context = context
         self.config = context.get_config()
 
         plugin_dir = Path(__file__).resolve().parent
@@ -38,6 +41,10 @@ class AngelSmilePlugin(Star):
         self.storage = MemeStorage(paths)
         self.manager = MemeManager(self.storage, context)
         self.renderer = StickerRenderer(self.storage)
+        self.steal_meme_tool = StealMemeTool(manager=self.manager)
+
+        self.context.provider_manager.llm_tools.remove_func(STEAL_TOOL_NAME)
+        self.context.add_llm_tools(self.steal_meme_tool)
 
         # 记录正在处理的 URL，防止重复
         self._processing_urls = set()
@@ -223,6 +230,9 @@ class AngelSmilePlugin(Star):
     async def on_decorating_result(self, event: AstrMessageEvent):
         """组合匹配渲染"""
         result = event.get_result()
+        if result is None or not getattr(result, "chain", None):
+            return
+
         new_chain = []
         for item in result.chain:
             if isinstance(item, Plain):
@@ -233,7 +243,8 @@ class AngelSmilePlugin(Star):
 
     async def terminate(self):
         """插件停止时清理资源"""
-        # 取消清理任务
+        self.context.provider_manager.llm_tools.remove_func(self.steal_meme_tool.name)
+
         if self._cleanup_task and not self._cleanup_task.done():
             self._cleanup_task.cancel()
             try:

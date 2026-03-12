@@ -37,4 +37,3 @@ def install_fake_astrbot() -> None:
     sys.modules["astrbot.core"] = core_module
     sys.modules["astrbot.core.utils"] = utils_module
     sys.modules["astrbot.core.utils.astrbot_path"] = path_module
-

@@ -38,7 +38,9 @@ class StorageTestCase(unittest.TestCase):
 
     def test_load_stickers_data_falls_back_on_invalid_json_shape(self):
         self.paths.data_dir.mkdir(parents=True, exist_ok=True)
-        self.paths.stickers_data_file.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+        self.paths.stickers_data_file.write_text(
+            json.dumps([1, 2, 3]), encoding="utf-8"
+        )
         result = self.storage.load_stickers_data()
         self.assertEqual(result, {})
 

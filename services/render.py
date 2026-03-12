@@ -2,7 +2,7 @@ import random
 import re
 
 from astrbot.api import logger
-from astrbot.core.message.components import Image, Plain
+from astrbot.api.message_components import Image, Plain
 
 
 class StickerRenderer:
@@ -62,30 +62,24 @@ class StickerRenderer:
                 matched_tag = match.group(0)
                 logger.info(f"[AngelSmile] 正则匹配到标签: {matched_tag}")
 
-                # 添加标签前的文本
                 if match.start() > last_end:
                     components.append(Plain(text[last_end : match.start()]))
 
-                # 解析所有 tag
                 tags = self._parse_tags(matched_tag)
 
                 if tags:
-                    # 查找包含这些 tag 的表情包
                     matched_memes = self.storage.get_memes_by_tags(tags)
                     logger.info(f"[AngelSmile] 查询结果: {len(matched_memes)} 个表情包")
 
                     if matched_memes:
-                        # 随机选择一个
                         meme_data = random.choice(matched_memes)
                         if meme_data and meme_data.get("file_path"):
                             file_path = meme_data["file_path"]
-                            meme_id = meme_data.get("id")
+                            meme_id = meme_data.get("meme_id")
                             logger.info(
                                 f"[AngelSmile] 成功替换，使用的文件路径: {file_path}"
                             )
-                            # 直接使用绝对路径
                             components.append(Image.fromFileSystem(file_path))
-                            # 增加使用计数
                             if meme_id:
                                 self.storage.increment_usage_count(meme_id)
                         else:
@@ -97,7 +91,6 @@ class StickerRenderer:
 
                 last_end = match.end()
 
-            # 添加剩余文本
             if last_end < len(text):
                 components.append(Plain(text[last_end:]))
 

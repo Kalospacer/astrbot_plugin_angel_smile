@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from astrbot.api import FunctionTool
 from astrbot.api.event import AstrMessageEvent
@@ -50,6 +50,24 @@ class StealMemeTool(FunctionTool):
         }
     )
 
+    async def call(
+        self,
+        context: Any,
+        image_path: str,
+        category: str,
+        description: str | None = None,
+        save_name: str | None = None,
+    ) -> str:
+        _ = context
+        if self.manager is None:
+            raise RuntimeError("StealMemeTool manager is not initialized")
+        return await self.manager.steal_meme(
+            image_path=image_path,
+            category=category,
+            description=description,
+            save_name=save_name,
+        )
+
     async def run(
         self,
         event: AstrMessageEvent,
@@ -59,9 +77,8 @@ class StealMemeTool(FunctionTool):
         save_name: str | None = None,
     ) -> str:
         _ = event
-        if self.manager is None:
-            raise RuntimeError("StealMemeTool manager is not initialized")
-        return await self.manager.steal_meme(
+        return await self.call(
+            context=None,
             image_path=image_path,
             category=category,
             description=description,
