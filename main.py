@@ -28,7 +28,7 @@ class AngelSmilePlugin(Star):
         self.config = context.get_config()
 
         plugin_dir = Path(__file__).resolve().parent
-        data_dir = Path(StarTools.get_data_dir())
+        data_dir = StarTools.get_data_dir()
 
         paths = PluginPaths(
             plugin_dir=plugin_dir,
@@ -43,7 +43,7 @@ class AngelSmilePlugin(Star):
         self.renderer = StickerRenderer(self.storage)
         self.steal_meme_tool = StealMemeTool(manager=self.manager)
 
-        self.context.provider_manager.llm_tools.remove_func(STEAL_TOOL_NAME)
+        StarTools.unregister_llm_tool(STEAL_TOOL_NAME)
         self.context.add_llm_tools(self.steal_meme_tool)
 
         # 记录正在处理的 URL，防止重复
@@ -257,7 +257,7 @@ class AngelSmilePlugin(Star):
 
     async def terminate(self):
         """插件停止时清理资源"""
-        self.context.provider_manager.llm_tools.remove_func(self.steal_meme_tool.name)
+        StarTools.unregister_llm_tool(self.steal_meme_tool.name)
 
         if self._cleanup_task and not self._cleanup_task.done():
             self._cleanup_task.cancel()
