@@ -33,7 +33,9 @@ class UtilsTestCase(unittest.TestCase):
             nested.write_bytes(b"ok")
 
             self.assertTrue(is_path_within_roots(nested, [root]))
-            self.assertFalse(is_path_within_roots(Path(temp_dir).parent / "other.png", [root]))
+            self.assertFalse(
+                is_path_within_roots(Path(temp_dir).parent / "other.png", [root])
+            )
 
 
 if __name__ == "__main__":

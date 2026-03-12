@@ -1,7 +1,6 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass(slots=True)
@@ -18,14 +17,14 @@ class MemeToolResult:
     ok: bool
     saved: bool
     category: str
-    saved_file: Optional[Path] = None
+    saved_file: Path | None = None
     description: str = ""
     message: str = ""
     reason: str = ""
     duplicate: bool = False
     duplicate_type: str = ""
     matched_file: str = ""
-    distance: Optional[int] = None
+    distance: int | None = None
 
     def to_message(self) -> str:
         payload = {
