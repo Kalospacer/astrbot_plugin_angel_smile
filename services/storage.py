@@ -456,24 +456,38 @@ class MemeStorage:
         Returns:
             匹配的表情包列表
         """
-        if not tags:
+        normalized_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
+        if not normalized_tags:
             return []
 
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # 构建查询：每个 tag 都要匹配
-        conditions = []
-        params = []
-        for tag in tags:
-            conditions.append("tags LIKE ?")
-            params.append(f'%"{tag}"%')
+        matched_meme_ids: set[str] | None = None
+        for tag in normalized_tags:
+            cursor.execute("SELECT meme_ids FROM tag_index WHERE tag = ?", (tag,))
+            row = cursor.fetchone()
+            if row is None:
+                return []
 
-        query = f"SELECT * FROM memes WHERE {' AND '.join(conditions)}"
-        cursor.execute(query, params)
+            meme_ids = set(json.loads(row["meme_ids"]))
+            if matched_meme_ids is None:
+                matched_meme_ids = meme_ids
+            else:
+                matched_meme_ids &= meme_ids
+
+            if not matched_meme_ids:
+                return []
+
+        assert matched_meme_ids is not None
 
         results = []
-        for row in cursor.fetchall():
+        for meme_id in matched_meme_ids:
+            cursor.execute("SELECT * FROM memes WHERE meme_id = ?", (meme_id,))
+            row = cursor.fetchone()
+            if row is None:
+                continue
+
             results.append(
                 {
                     "meme_id": row["meme_id"],
