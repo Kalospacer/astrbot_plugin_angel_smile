@@ -52,8 +52,7 @@ class DHashDedupService:
 
     def unregister_file(self, file_path: Path) -> None:
         resolved = str(file_path.resolve())
-        if resolved in self.index:
-            self.index.pop(resolved, None)
+        if self.index.pop(resolved, None) is not None:
             self._persist_index()
 
     def clear(self) -> None:

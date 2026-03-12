@@ -50,7 +50,7 @@ class AngelSmilePlugin(Star):
         # 记录正在处理的 URL，防止重复
         self._processing_urls = set()
         self._recent_sent_memes: dict[str, deque[dict[str, str]]] = defaultdict(
-            lambda: deque(maxlen=100)
+            lambda: deque(maxlen=10)
         )
 
         # 清理任务引用
@@ -237,11 +237,9 @@ class AngelSmilePlugin(Star):
         if not message_chain:
             return
 
-        only_marked_emoji_images = self.config.get(
-            "only_steal_marked_emoji_images", False
-        )
+        steal_all_images = self.config.get("steal_all_images", False)
         marked_emoji_urls = (
-            self._get_marked_emoji_urls(event) if only_marked_emoji_images else set()
+            set() if steal_all_images else self._get_marked_emoji_urls(event)
         )
 
         for item in message_chain:
@@ -250,7 +248,7 @@ class AngelSmilePlugin(Star):
                 if not image_url:
                     continue
 
-                if only_marked_emoji_images and image_url not in marked_emoji_urls:
+                if not steal_all_images and image_url not in marked_emoji_urls:
                     continue
 
                 # 内存去重
@@ -371,13 +369,10 @@ class AngelSmilePlugin(Star):
                 )
                 return
 
-            all_memes = self.storage.get_all_memes()
-            deleted_count = 0
-            for meme in all_memes:
-                if self.storage.delete_meme(meme["meme_id"]):
-                    self.manager.dedup.unregister_file(Path(meme["file_path"]))
-                    deleted_count += 1
-            self.storage.load_stickers_data()
+            deleted_file_paths = self.storage.delete_all_memes_and_get_paths()
+            deleted_count = len(deleted_file_paths)
+            if deleted_count > 0:
+                self.manager.dedup.clear()
             await event.send(
                 MessageChain().message(f"已删除全部表情包，共 {deleted_count} 项。")
             )

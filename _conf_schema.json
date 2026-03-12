@@ -42,10 +42,10 @@
     "type": "int",
     "default": 0
   },
-  "only_steal_marked_emoji_images": {
-    "description": "仅偷已标记表情包图片",
-    "hint": "开启后，仅自动偷取 NapCat 原始 image 段中带有 emoji_id、emoji_package_id 或 key 标记的图片。",
+  "steal_all_images": {
+    "description": "偷取所有图片",
+    "hint": "开启后，所有图片都会进入自动偷图审查；关闭时仅自动偷取 NapCat 原始 image 段中带有 emoji_id、emoji_package_id 或 key 标记的图片。",
     "type": "bool",
-    "default": true
+    "default": false
   }
 }
