@@ -1,5 +1,5 @@
 name: astrbot_plugin_angel_smile
-version: "2.0.0"
+version: "2.0.1"
 description: "天使之笑 2.0：多 Tag 智能表情包系统，支持自动异步偷图和组合匹配。"
 author: "Kalo & Muice"
 dependencies: []
