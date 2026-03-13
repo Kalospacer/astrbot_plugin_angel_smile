@@ -6,8 +6,9 @@ from astrbot.api.message_components import Image, Plain
 
 
 class StickerRenderer:
-    def __init__(self, storage):
+    def __init__(self, storage, max_stickers_per_message: int = 1):
         self.storage = storage
+        self.max_stickers_per_message = max(0, int(max_stickers_per_message))
 
     def build_sticker_list(self) -> str:
         """构建表情列表（兼容旧版）"""
@@ -52,6 +53,7 @@ class StickerRenderer:
     async def render_text(self, text: str) -> list:
         """渲染文本，支持 :tag1:tag2: 组合匹配"""
         components = []
+        stickers_used = 0
         try:
             # 匹配 :tag1:tag2: 格式（连续多个标签）
             # 例如："你好:amused:cat:哈哈" -> 匹配 ":amused:cat:"
@@ -73,13 +75,14 @@ class StickerRenderer:
                         f"[AngelSmile] render_text 查询结果: {len(matched_memes)} 个表情包"
                     )
 
-                    if matched_memes:
+                    if matched_memes and stickers_used < self.max_stickers_per_message:
                         meme_data = random.choice(matched_memes)
                         if meme_data and meme_data.get("file_path"):
                             file_path = meme_data["file_path"]
                             meme_id = meme_data.get("meme_id")
                             logger.debug("[AngelSmile] render_text 命中表情包并替换")
                             components.append(Image.fromFileSystem(file_path))
+                            stickers_used += 1
                             if meme_id:
                                 self.storage.increment_usage_count(meme_id)
                         else:

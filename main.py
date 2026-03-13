@@ -41,7 +41,10 @@ class AngelSmilePlugin(Star):
 
         self.storage = MemeStorage(paths)
         self.manager = MemeManager(self.storage, context, plugin_config=self.config)
-        self.renderer = StickerRenderer(self.storage)
+        self.renderer = StickerRenderer(
+            self.storage,
+            max_stickers_per_message=self.config.get("max_stickers_per_message", 1),
+        )
         self.steal_meme_tool = StealMemeTool(manager=self.manager)
 
         StarTools.unregister_llm_tool(STEAL_TOOL_NAME)
