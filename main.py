@@ -20,7 +20,7 @@ from .tools.steal_meme import StealMemeTool
     "astrbot_plugin_angel_smile",
     "Kalo & Muice",
     "天使之笑 2.0：多 Tag 智能表情包系统，支持自动异步偷图和组合匹配。",
-    "2.0.0",
+    "2.0.1",
 )
 class AngelSmilePlugin(Star):
     def __init__(self, context: Context, config=None):
@@ -52,6 +52,7 @@ class AngelSmilePlugin(Star):
 
         # 记录正在处理的 URL，防止重复
         self._processing_urls = set()
+        self._steal_tasks: set[asyncio.Task] = set()
         self._recent_sent_memes: dict[str, deque[dict[str, str]]] = defaultdict(
             lambda: deque(maxlen=10)
         )
@@ -100,6 +101,10 @@ class AngelSmilePlugin(Star):
         if recent_memes and recent_memes[-1]["meme_id"] == payload["meme_id"]:
             return
         recent_memes.append(payload)
+
+    def _track_steal_task(self, task: asyncio.Task) -> None:
+        self._steal_tasks.add(task)
+        task.add_done_callback(self._steal_tasks.discard)
 
     async def initialize(self):
         self.storage.initialize()
@@ -266,13 +271,14 @@ class AngelSmilePlugin(Star):
                 )
 
                 # 异步审查+偷图，不阻塞 pipeline
-                asyncio.create_task(
+                task = asyncio.create_task(
                     self._llm_review_and_steal(
                         image_url=image_url,
                         source_group=str(event.get_group_id()),
                         source_user=str(event.get_sender_id()),
                     )
                 )
+                self._track_steal_task(task)
 
     async def _llm_review_and_steal(
         self, image_url: str, source_group: str, source_user: str
@@ -423,5 +429,11 @@ class AngelSmilePlugin(Star):
                 await self._cleanup_task
             except asyncio.CancelledError:
                 pass
+
+        if self._steal_tasks:
+            for task in list(self._steal_tasks):
+                task.cancel()
+            await asyncio.gather(*list(self._steal_tasks), return_exceptions=True)
+            self._steal_tasks.clear()
 
         logger.info("AngelSmile 2.0: 插件已停止")
