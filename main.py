@@ -238,6 +238,7 @@ class AngelSmilePlugin(Star):
 
         except Exception as exc:
             logger.error(f"AngelSmile: 执行清理时出错: {exc}", exc_info=True)
+            raise
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
